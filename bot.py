@@ -8,9 +8,22 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from datetime import datetime, timedelta
 
-# Настройка логирования для отладки
+# Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Проверка директории /app
+try:
+    if not os.path.exists('/app'):
+        os.makedirs('/app')
+        logger.info("Created directory /app")
+    with open('/app/test_write', 'w') as f:
+        f.write('test')
+    os.remove('/app/test_write')
+    logger.info("Write permissions in /app confirmed")
+except Exception as e:
+    logger.error(f"Cannot access or write to /app: {e}")
+    raise
 
 # Инициализация базы данных SQLite
 def init_db():
@@ -28,7 +41,7 @@ def init_db():
         c.execute("INSERT OR IGNORE INTO promos (code, discount) VALUES ('SUMMER10', 0.1)")
         c.execute("INSERT OR IGNORE INTO promos (code, discount) VALUES ('WELCOME', 0.05)")
         conn.commit()
-        logger.info("Database initialized successfully")
+        logger.info("Database initialized successfully at /app/bot.db")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
@@ -45,7 +58,7 @@ PRICES = {
 try:
     with open('/app/prices.json', 'w') as f:
         json.dump(PRICES, f)
-    logger.info("prices.json created successfully")
+    logger.info("prices.json created successfully at /app/prices.json")
 except Exception as e:
     logger.error(f"Failed to create prices.json: {e}")
 
@@ -174,7 +187,6 @@ async def start(update: Update, context):
         lang = c.fetchone()[0]
         conn.commit()
 
-        # Обработка рефералов
         if context.args and context.args[0].startswith('ref'):
             referred_by = context.args[0].replace('ref', '')
             c.execute("UPDATE users SET referred_by = ? WHERE user_id = ?", (referred_by, user_id))
@@ -245,20 +257,17 @@ async def button_callback(update: Update, context):
                 reply_markup=keyboard
             )
 
-            # Сохраняем заказ
             conn = sqlite3.connect('/app/bot.db')
             c = conn.cursor()
             c.execute("INSERT INTO orders (user_id, uc_amount, price, status, timestamp) VALUES (?, ?, ?, ?, ?)",
                       (user_id, uc_amount, price, 'pending', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
             conn.commit()
 
-            # Начисляем бонусы
             price_value = float(price.split()[0])
             bonuses = int(price_value // 1000)
             c.execute("UPDATE users SET bonuses = bonuses + ? WHERE user_id = ?", (bonuses, user_id))
             conn.commit()
 
-            # Уведомление админу
             await context.bot.send_message(
                 ADMIN_ID,
                 f"Новый заказ:\nПользователь: @{query.from_user.username or 'не указан'}\nUC: {uc_amount}\nЦена: {price}"
@@ -275,7 +284,6 @@ async def button_callback(update: Update, context):
                 TRANSLATIONS[lang]['payment'].format(uc_amount=uc_amount, player_id=player_id)
             )
 
-            # Начисляем бонусы рефералу
             price = float(load_prices().get(uc_amount, "0").replace(" ₽", ""))
             bonus = int(price * 0.05)
             conn = sqlite3.connect('/app/bot.db')
@@ -622,7 +630,6 @@ async def simple_chatbot(update: Update, context):
 
 async def main():
     try:
-        # Проверка токена
         token = os.environ.get("TOKEN")
         if not token:
             logger.error("No TOKEN environment variable set")
@@ -630,7 +637,6 @@ async def main():
 
         application = Application.builder().token(token).build()
 
-        # Обработчики
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("buy_uc", buy_uc))
         application.add_handler(CommandHandler("promo", promo))
@@ -650,7 +656,6 @@ async def main():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, simple_chatbot))
         application.add_handler(MessageHandler(filters.PHOTO, handle_screenshot))
 
-        # Запуск с вебхуком
         logger.info("Starting webhook")
         await application.initialize()
         await application.start()
