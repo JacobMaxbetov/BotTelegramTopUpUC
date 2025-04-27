@@ -12,23 +12,23 @@ from datetime import datetime, timedelta
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Проверка директории /data
+# Проверка директории /opt/data
 try:
-    if not os.path.exists('/data'):
-        os.makedirs('/data')
-        logger.info("Created directory /data")
-    with open('/data/test_write', 'w') as f:
+    if not os.path.exists('/opt/data'):
+        os.makedirs('/opt/data')
+        logger.info("Created directory /opt/data")
+    with open('/opt/data/test_write', 'w') as f:
         f.write('test')
-    os.remove('/data/test_write')
-    logger.info("Write permissions in /data confirmed")
+    os.remove('/opt/data/test_write')
+    logger.info("Write permissions in /opt/data confirmed")
 except Exception as e:
-    logger.error(f"Cannot access or write to /data: {e}")
+    logger.error(f"Cannot access or write to /opt/data: {e}")
     raise
 
 # Инициализация базы данных SQLite
 def init_db():
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS orders
                      (user_id INTEGER, uc_amount TEXT, price TEXT, player_id TEXT, status TEXT, timestamp TEXT)''')
@@ -41,7 +41,7 @@ def init_db():
         c.execute("INSERT OR IGNORE INTO promos (code, discount) VALUES ('SUMMER10', 0.1)")
         c.execute("INSERT OR IGNORE INTO promos (code, discount) VALUES ('WELCOME', 0.05)")
         conn.commit()
-        logger.info("Database initialized successfully at /data/bot.db")
+        logger.info("Database initialized successfully at /opt/data/bot.db")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
@@ -56,15 +56,15 @@ PRICES = {
     "1800": "2251.53 ₽", "3850": "4503.05 ₽", "8100": "9006.10 ₽"
 }
 try:
-    with open('/data/prices.json', 'w') as f:
+    with open('/opt/data/prices.json', 'w') as f:
         json.dump(PRICES, f)
-    logger.info("prices.json created successfully at /data/prices.json")
+    logger.info("prices.json created successfully at /opt/data/prices.json")
 except Exception as e:
     logger.error(f"Failed to create prices.json: {e}")
 
 def load_prices():
     try:
-        with open('/data/prices.json', 'r') as f:
+        with open('/opt/data/prices.json', 'r') as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"Failed to load prices.json: {e}")
@@ -162,7 +162,7 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", "123456789"))  # Замени чере
 async def check_ban(update: Update, context):
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT user_id FROM banned_users WHERE user_id = ?", (user_id,))
         if c.fetchone():
@@ -180,7 +180,7 @@ async def start(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("INSERT OR IGNORE INTO users (user_id, language, bonuses) VALUES (?, 'ru', 0)", (user_id,))
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
@@ -204,7 +204,7 @@ async def buy_uc(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -228,7 +228,7 @@ async def button_callback(update: Update, context):
     await query.answer()
     user_id = query.from_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -257,7 +257,7 @@ async def button_callback(update: Update, context):
                 reply_markup=keyboard
             )
 
-            conn = sqlite3.connect('/data/bot.db')
+            conn = sqlite3.connect('/opt/data/bot.db')
             c = conn.cursor()
             c.execute("INSERT INTO orders (user_id, uc_amount, price, status, timestamp) VALUES (?, ?, ?, ?, ?)",
                       (user_id, uc_amount, price, 'pending', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
@@ -286,7 +286,7 @@ async def button_callback(update: Update, context):
 
             price = float(load_prices().get(uc_amount, "0").replace(" ₽", ""))
             bonus = int(price * 0.05)
-            conn = sqlite3.connect('/data/bot.db')
+            conn = sqlite3.connect('/opt/data/bot.db')
             c = conn.cursor()
             c.execute("SELECT referred_by FROM users WHERE user_id = ?", (user_id,))
             referred_by = c.fetchone()
@@ -302,7 +302,7 @@ async def handle_player_id(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -317,10 +317,10 @@ async def handle_player_id(update: Update, context):
             context.user_data['waiting_for_id'] = False
             await update.message.reply_text(TRANSLATIONS[lang]['id_saved'].format(player_id=player_id))
 
-            conn = sqlite3.connect('/data/bot.db')
+            conn = sqlite3.connect('/opt/data/bot.db')
             c = conn.cursor()
             c.execute("UPDATE orders SET player_id = ? WHERE user_id = ? AND status = 'pending'",
-                      (user_id, player_id))
+                      (player_id, user_id))
             conn.commit()
             conn.close()
     except Exception as e:
@@ -331,7 +331,7 @@ async def handle_screenshot(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -352,7 +352,7 @@ async def promo(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -368,7 +368,7 @@ async def handle_promo(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -394,7 +394,7 @@ async def history(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -415,7 +415,7 @@ async def bonuses(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language, bonuses FROM users WHERE user_id = ?", (user_id,))
         lang, bonuses = c.fetchone()
@@ -429,7 +429,7 @@ async def custom_uc(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -444,7 +444,7 @@ async def handle_custom_uc(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -470,7 +470,7 @@ async def referral(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language, referral_code FROM users WHERE user_id = ?", (user_id,))
         lang, referral_code = c.fetchone()
@@ -503,7 +503,7 @@ async def set_language(update: Update, context):
     user_id = query.from_user.id
     try:
         lang = 'ru' if query.data == "lang_ru" else 'en'
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
         conn.commit()
@@ -535,7 +535,7 @@ async def admin_callback(update: Update, context):
         return
     try:
         if query.data == "admin_orders":
-            conn = sqlite3.connect('/data/bot.db')
+            conn = sqlite3.connect('/opt/data/bot.db')
             c = conn.cursor()
             c.execute("SELECT user_id, uc_amount, price, status, timestamp FROM orders")
             orders = c.fetchall()
@@ -547,7 +547,7 @@ async def admin_callback(update: Update, context):
             await query.message.reply_text(f"Заказы:\n{orders_text}")
 
         elif query.data == "admin_stats":
-            conn = sqlite3.connect('/data/bot.db')
+            conn = sqlite3.connect('/opt/data/bot.db')
             c = conn.cursor()
             c.execute("SELECT COUNT(*), SUM(CAST(REPLACE(price, ' ₽', '') AS REAL)) FROM orders")
             count, total = c.fetchone()
@@ -571,7 +571,7 @@ async def handle_admin_ban(update: Update, context):
         if context.user_data.get('waiting_for_ban', False):
             try:
                 ban_id = int(update.message.text)
-                conn = sqlite3.connect('/data/bot.db')
+                conn = sqlite3.connect('/opt/data/bot.db')
                 c = conn.cursor()
                 c.execute("INSERT OR IGNORE INTO banned_users (user_id) VALUES (?)", (ban_id,))
                 conn.commit()
@@ -587,7 +587,7 @@ async def reminder(context):
     job = context.job
     user_id = job.data['user_id']
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
@@ -604,7 +604,7 @@ async def simple_chatbot(update: Update, context):
         return
     user_id = update.effective_user.id
     try:
-        conn = sqlite3.connect('/data/bot.db')
+        conn = sqlite3.connect('/opt/data/bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
         lang = c.fetchone()[0]
