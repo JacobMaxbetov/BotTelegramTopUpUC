@@ -1,28 +1,39 @@
+import os
 import sqlite3
 import json
 import re
 import asyncio
+import logging
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from datetime import datetime, timedelta
 
+# Настройка логирования для отладки
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Инициализация базы данных SQLite
 def init_db():
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS orders
-                 (user_id INTEGER, uc_amount TEXT, price TEXT, player_id TEXT, status TEXT, timestamp TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY, language TEXT, bonuses INTEGER, referral_code TEXT, referred_by TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS promos
-                 (code TEXT PRIMARY KEY, discount REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS banned_users
-                 (user_id INTEGER PRIMARY KEY)''')
-    # Добавляем пример промокодов
-    c.execute("INSERT OR IGNORE INTO promos (code, discount) VALUES ('SUMMER10', 0.1)")
-    c.execute("INSERT OR IGNORE INTO promos (code, discount) VALUES ('WELCOME', 0.05)")
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS orders
+                     (user_id INTEGER, uc_amount TEXT, price TEXT, player_id TEXT, status TEXT, timestamp TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS users
+                     (user_id INTEGER PRIMARY KEY, language TEXT, bonuses INTEGER, referral_code TEXT, referred_by TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS promos
+                     (code TEXT PRIMARY KEY, discount REAL)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS banned_users
+                     (user_id INTEGER PRIMARY KEY)''')
+        c.execute("INSERT OR IGNORE INTO promos (code, discount) VALUES ('SUMMER10', 0.1)")
+        c.execute("INSERT OR IGNORE INTO promos (code, discount) VALUES ('WELCOME', 0.05)")
+        conn.commit()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        raise
+    finally:
+        conn.close()
 
 init_db()
 
@@ -31,14 +42,19 @@ PRICES = {
     "60": "90.06 ₽", "325": "450.31 ₽", "660": "900.61 ₽",
     "1800": "2251.53 ₽", "3850": "4503.05 ₽", "8100": "9006.10 ₽"
 }
-with open('prices.json', 'w') as f:
-    json.dump(PRICES, f)
+try:
+    with open('/app/prices.json', 'w') as f:
+        json.dump(PRICES, f)
+    logger.info("prices.json created successfully")
+except Exception as e:
+    logger.error(f"Failed to create prices.json: {e}")
 
 def load_prices():
     try:
-        with open('prices.json', 'r') as f:
+        with open('/app/prices.json', 'r') as f:
             return json.load(f)
-    except:
+    except Exception as e:
+        logger.error(f"Failed to load prices.json: {e}")
         return PRICES
 
 # Проверка валидности ID игрока
@@ -51,7 +67,7 @@ TRANSLATIONS = {
         'welcome': "Здравствуйте, это бот от TopUp UC (BETA)\nЯ буду сопровождать Вас.\n\n"
                   "Доступные команды:\n"
                   "/buy_uc — Купить UC\n"
-                  "/promo — Ввести промокод\n"
+                  "/promo — Ввести промокод (например, SUMMER10)\n"
                   "/history — Показать список заказов\n"
                   "/bonuses — Показать бонусы\n"
                   "/custom — Калькулятор UC\n"
@@ -128,463 +144,526 @@ TRANSLATIONS = {
 }
 
 # ID админа
-ADMIN_ID = 2019878139  # Замени на свой Telegram ID
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "123456789"))  # Замени через переменную окружения в Render
 
 async def check_ban(update: Update, context):
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT user_id FROM banned_users WHERE user_id = ?", (user_id,))
-    if c.fetchone():
-        await update.message.reply_text(TRANSLATIONS['ru']['banned'])
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM banned_users WHERE user_id = ?", (user_id,))
+        if c.fetchone():
+            await update.message.reply_text(TRANSLATIONS['ru']['banned'])
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Check ban failed: {e}")
+        return False
+    finally:
         conn.close()
-        return True
-    conn.close()
-    return False
 
 async def start(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users (user_id, language, bonuses) VALUES (?, 'ru', 0)", (user_id,))
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    conn.commit()
-    conn.close()
-
-    # Обработка рефералов
-    if context.args and context.args[0].startswith('ref'):
-        referred_by = context.args[0].replace('ref', '')
-        conn = sqlite3.connect('bot.db')
+    try:
+        conn = sqlite3.connect('/app/bot.db')
         c = conn.cursor()
-        c.execute("UPDATE users SET referred_by = ? WHERE user_id = ?", (referred_by, user_id))
+        c.execute("INSERT OR IGNORE INTO users (user_id, language, bonuses) VALUES (?, 'ru', 0)", (user_id,))
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
         conn.commit()
+
+        # Обработка рефералов
+        if context.args and context.args[0].startswith('ref'):
+            referred_by = context.args[0].replace('ref', '')
+            c.execute("UPDATE users SET referred_by = ? WHERE user_id = ?", (referred_by, user_id))
+            conn.commit()
+
+        await update.message.reply_text(TRANSLATIONS[lang]['welcome'])
+        context.job_queue.run_once(reminder, 600, data={'user_id': user_id}, name=str(user_id))
+    except Exception as e:
+        logger.error(f"Start command failed: {e}")
+    finally:
         conn.close()
-
-    await update.message.reply_text(TRANSLATIONS[lang]['welcome'])
-
-    # Планируем напоминание
-    context.job_queue.run_once(reminder, 600, data={'user_id': user_id}, name=str(user_id))
 
 async def buy_uc(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    conn.close()
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
+        conn.close()
 
-    prices = load_prices()
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"60 UC: {prices['60']}", callback_data="60uc")],
-        [InlineKeyboardButton(f"325 UC: {prices['325']}", callback_data="325uc")],
-        [InlineKeyboardButton(f"660 UC: {prices['660']}", callback_data="660uc")],
-        [InlineKeyboardButton(f"1800 UC: {prices['1800']}", callback_data="1800uc")],
-        [InlineKeyboardButton(f"3850 UC: {prices['3850']}", callback_data="3850uc")],
-        [InlineKeyboardButton(f"8100 UC: {prices['8100']}", callback_data="8100uc")]
-    ])
-    await update.message.reply_text(TRANSLATIONS[lang]['choose_uc'], reply_markup=keyboard)
+        prices = load_prices()
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"60 UC: {prices['60']}", callback_data="60uc")],
+            [InlineKeyboardButton(f"325 UC: {prices['325']}", callback_data="325uc")],
+            [InlineKeyboardButton(f"660 UC: {prices['660']}", callback_data="660uc")],
+            [InlineKeyboardButton(f"1800 UC: {prices['1800']}", callback_data="1800uc")],
+            [InlineKeyboardButton(f"3850 UC: {prices['3850']}", callback_data="3850uc")],
+            [InlineKeyboardButton(f"8100 UC: {prices['8100']}", callback_data="8100uc")]
+        ])
+        await update.message.reply_text(TRANSLATIONS[lang]['choose_uc'], reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Buy UC command failed: {e}")
 
 async def button_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    conn.close()
-
-    if query.data in ["60uc", "325uc", "660uc", "1800uc", "3850uc", "8100uc"]:
-        context.user_data['selected_uc'] = query.data.replace("uc", "")
-        uc_amount = context.user_data['selected_uc']
-        prices = load_prices()
-        price = prices.get(uc_amount, "неизвестно")
-        discount = context.user_data.get('discount', 0)
-        if discount:
-            price_value = float(price.replace(" ₽", ""))
-            price = f"{price_value * (1 - discount):.2f} ₽ (скидка {discount*100}%)"
-
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Ввести ID" if lang == 'ru' else "Enter ID", callback_data="enter_id")],
-            [InlineKeyboardButton("Оплатить" if lang == 'ru' else "Pay", callback_data="pay")]
-        ])
-        await query.message.reply_text(
-            TRANSLATIONS[lang]['order_details'].format(
-                username=query.from_user.username or 'не указан',
-                uc_amount=uc_amount,
-                price=price
-            ),
-            reply_markup=keyboard
-        )
-
-        # Сохраняем заказ
-        conn = sqlite3.connect('bot.db')
+    try:
+        conn = sqlite3.connect('/app/bot.db')
         c = conn.cursor()
-        c.execute("INSERT INTO orders (user_id, uc_amount, price, status, timestamp) VALUES (?, ?, ?, ?, ?)",
-                  (user_id, uc_amount, price, 'pending', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        conn.commit()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
         conn.close()
 
-        # Начисляем бонусы
-        price_value = float(price.split()[0])
-        bonuses = int(price_value // 1000)
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("UPDATE users SET bonuses = bonuses + ? WHERE user_id = ?", (bonuses, user_id))
-        conn.commit()
-        conn.close()
+        if query.data in ["60uc", "325uc", "660uc", "1800uc", "3850uc", "8100uc"]:
+            context.user_data['selected_uc'] = query.data.replace("uc", "")
+            uc_amount = context.user_data['selected_uc']
+            prices = load_prices()
+            price = prices.get(uc_amount, "неизвестно")
+            discount = context.user_data.get('discount', 0)
+            if discount:
+                price_value = float(price.replace(" ₽", ""))
+                price = f"{price_value * (1 - discount):.2f} ₽ (скидка {discount*100}%)"
 
-        # Уведомление админу
-        await context.bot.send_message(
-            ADMIN_ID,
-            f"Новый заказ:\nПользователь: @{query.from_user.username or 'не указан'}\nUC: {uc_amount}\nЦена: {price}"
-        )
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Ввести ID" if lang == 'ru' else "Enter ID", callback_data="enter_id")],
+                [InlineKeyboardButton("Оплатить" if lang == 'ru' else "Pay", callback_data="pay")]
+            ])
+            await query.message.reply_text(
+                TRANSLATIONS[lang]['order_details'].format(
+                    username=query.from_user.username or 'не указан',
+                    uc_amount=uc_amount,
+                    price=price
+                ),
+                reply_markup=keyboard
+            )
 
-    elif query.data == "enter_id":
-        await query.message.reply_text(TRANSLATIONS[lang]['enter_id'])
-        context.user_data['waiting_for_id'] = True
+            # Сохраняем заказ
+            conn = sqlite3.connect('/app/bot.db')
+            c = conn.cursor()
+            c.execute("INSERT INTO orders (user_id, uc_amount, price, status, timestamp) VALUES (?, ?, ?, ?, ?)",
+                      (user_id, uc_amount, price, 'pending', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            conn.commit()
 
-    elif query.data == "pay":
-        player_id = context.user_data.get('player_id', 'не указан')
-        uc_amount = context.user_data.get('selected_uc', 'неизвестно')
-        await query.message.reply_text(
-            TRANSLATIONS[lang]['payment'].format(uc_amount=uc_amount, player_id=player_id)
-        )
+            # Начисляем бонусы
+            price_value = float(price.split()[0])
+            bonuses = int(price_value // 1000)
+            c.execute("UPDATE users SET bonuses = bonuses + ? WHERE user_id = ?", (bonuses, user_id))
+            conn.commit()
 
-        # Начисляем бонусы рефералу
-        price = float(load_prices().get(uc_amount, "0").replace(" ₽", ""))
-        bonus = int(price * 0.05)
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("SELECT referred_by FROM users WHERE user_id = ?", (user_id,))
-        referred_by = c.fetchone()
-        if referred_by and referred_by[0]:
-            c.execute("UPDATE users SET bonuses = bonuses + ? WHERE user_id = ?", (bonus, int(referred_by[0])))
-        conn.commit()
-        conn.close()
+            # Уведомление админу
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"Новый заказ:\nПользователь: @{query.from_user.username or 'не указан'}\nUC: {uc_amount}\nЦена: {price}"
+            )
+
+        elif query.data == "enter_id":
+            await query.message.reply_text(TRANSLATIONS[lang]['enter_id'])
+            context.user_data['waiting_for_id'] = True
+
+        elif query.data == "pay":
+            player_id = context.user_data.get('player_id', 'не указан')
+            uc_amount = context.user_data.get('selected_uc', 'неизвестно')
+            await query.message.reply_text(
+                TRANSLATIONS[lang]['payment'].format(uc_amount=uc_amount, player_id=player_id)
+            )
+
+            # Начисляем бонусы рефералу
+            price = float(load_prices().get(uc_amount, "0").replace(" ₽", ""))
+            bonus = int(price * 0.05)
+            conn = sqlite3.connect('/app/bot.db')
+            c = conn.cursor()
+            c.execute("SELECT referred_by FROM users WHERE user_id = ?", (user_id,))
+            referred_by = c.fetchone()
+            if referred_by and referred_by[0]:
+                c.execute("UPDATE users SET bonuses = bonuses + ? WHERE user_id = ?", (bonus, int(referred_by[0])))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        logger.error(f"Button callback failed: {e}")
 
 async def handle_player_id(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    conn.close()
-
-    if context.user_data.get('waiting_for_id', False):
-        player_id = update.message.text
-        if not is_valid_player_id(player_id):
-            await update.message.reply_text(TRANSLATIONS[lang]['invalid_id'])
-            return
-        context.user_data['player_id'] = player_id
-        context.user_data['waiting_for_id'] = False
-        await update.message.reply_text(TRANSLATIONS[lang]['id_saved'].format(player_id=player_id))
-
-        # Обновляем ID в заказе
-        conn = sqlite3.connect('bot.db')
+    try:
+        conn = sqlite3.connect('/app/bot.db')
         c = conn.cursor()
-        c.execute("UPDATE orders SET player_id = ? WHERE user_id = ? AND status = 'pending'",
-                  (player_id, user_id))
-        conn.commit()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
         conn.close()
+
+        if context.user_data.get('waiting_for_id', False):
+            player_id = update.message.text
+            if not is_valid_player_id(player_id):
+                await update.message.reply_text(TRANSLATIONS[lang]['invalid_id'])
+                return
+            context.user_data['player_id'] = player_id
+            context.user_data['waiting_for_id'] = False
+            await update.message.reply_text(TRANSLATIONS[lang]['id_saved'].format(player_id=player_id))
+
+            conn = sqlite3.connect('/app/bot.db')
+            c = conn.cursor()
+            c.execute("UPDATE orders SET player_id = ? WHERE user_id = ? AND status = 'pending'",
+                      (player_id, user_id))
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        logger.error(f"Handle player ID failed: {e}")
 
 async def handle_screenshot(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    conn.close()
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
+        conn.close()
 
-    if update.message.photo:
-        await update.message.reply_text(TRANSLATIONS[lang]['screenshot_received'])
-        await context.bot.send_photo(
-            ADMIN_ID,
-            update.message.photo[-1].file_id,
-            caption=f"Скриншот платежа от @{update.effective_user.username or 'не указан'}"
-        )
+        if update.message.photo:
+            await update.message.reply_text(TRANSLATIONS[lang]['screenshot_received'])
+            await context.bot.send_photo(
+                ADMIN_ID,
+                update.message.photo[-1].file_id,
+                caption=f"Скриншот платежа от @{update.effective_user.username or 'не указан'}"
+            )
+    except Exception as e:
+        logger.error(f"Handle screenshot failed: {e}")
 
 async def promo(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    conn.close()
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
+        conn.close()
 
-    await update.message.reply_text(TRANSLATIONS[lang]['promo_prompt'])
-    context.user_data['waiting_for_promo'] = True
+        await update.message.reply_text(TRANSLATIONS[lang]['promo_prompt'])
+        context.user_data['waiting_for_promo'] = True
+    except Exception as e:
+        logger.error(f"Promo command failed: {e}")
 
 async def handle_promo(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
 
-    if context.user_data.get('waiting_for_promo', False):
-        promo_code = update.message.text.upper()
-        c.execute("SELECT discount FROM promos WHERE code = ?", (promo_code,))
-        result = c.fetchone()
-        if result:
-            context.user_data['discount'] = result[0]
-            await update.message.reply_text(
-                TRANSLATIONS[lang]['promo_success'].format(discount=result[0]*100)
-            )
-        else:
-            await update.message.reply_text(TRANSLATIONS[lang]['promo_invalid'])
-        context.user_data['waiting_for_promo'] = False
-    conn.close()
+        if context.user_data.get('waiting_for_promo', False):
+            promo_code = update.message.text.upper()
+            c.execute("SELECT discount FROM promos WHERE code = ?", (promo_code,))
+            result = c.fetchone()
+            if result:
+                context.user_data['discount'] = result[0]
+                await update.message.reply_text(
+                    TRANSLATIONS[lang]['promo_success'].format(discount=result[0]*100)
+                )
+            else:
+                await update.message.reply_text(TRANSLATIONS[lang]['promo_invalid'])
+            context.user_data['waiting_for_promo'] = False
+        conn.close()
+    except Exception as e:
+        logger.error(f"Handle promo failed: {e}")
 
 async def history(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    c.execute("SELECT uc_amount, price, status, timestamp FROM orders WHERE user_id = ?", (user_id,))
-    orders = c.fetchall()
-    conn.close()
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
+        c.execute("SELECT uc_amount, price, status, timestamp FROM orders WHERE user_id = ?", (user_id,))
+        orders = c.fetchall()
+        conn.close()
 
-    if not orders:
-        await update.message.reply_text("У вас пока нет заказов." if lang == 'ru' else "You have no orders yet.")
-        return
-    history_text = "\n".join([f"{o[3]}: {o[0]} UC, {o[1]}, {o[2]}" for o in orders])
-    await update.message.reply_text(TRANSLATIONS[lang]['history'].format(history=history_text))
+        if not orders:
+            await update.message.reply_text("У вас пока нет заказов." if lang == 'ru' else "You have no orders yet.")
+            return
+        history_text = "\n".join([f"{o[3]}: {o[0]} UC, {o[1]}, {o[2]}" for o in orders])
+        await update.message.reply_text(TRANSLATIONS[lang]['history'].format(history=history_text))
+    except Exception as e:
+        logger.error(f"History command failed: {e}")
 
 async def bonuses(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language, bonuses FROM users WHERE user_id = ?", (user_id,))
-    lang, bonuses = c.fetchone()
-    conn.close()
-    await update.message.reply_text(TRANSLATIONS[lang]['bonuses'].format(bonuses=bonuses))
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language, bonuses FROM users WHERE user_id = ?", (user_id,))
+        lang, bonuses = c.fetchone()
+        conn.close()
+        await update.message.reply_text(TRANSLATIONS[lang]['bonuses'].format(bonuses=bonuses))
+    except Exception as e:
+        logger.error(f"Bonuses command failed: {e}")
 
 async def custom_uc(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    conn.close()
-    await update.message.reply_text(TRANSLATIONS[lang]['custom_uc'])
-    context.user_data['waiting_for_custom_uc'] = True
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
+        conn.close()
+        await update.message.reply_text(TRANSLATIONS[lang]['custom_uc'])
+        context.user_data['waiting_for_custom_uc'] = True
+    except Exception as e:
+        logger.error(f"Custom UC command failed: {e}")
 
 async def handle_custom_uc(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    conn.close()
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
+        conn.close()
 
-    if context.user_data.get('waiting_for_custom_uc', False):
-        try:
-            uc_amount = int(update.message.text)
-            if uc_amount <= 0:
-                raise ValueError
-            price = uc_amount * 1.5
-            await update.message.reply_text(
-                TRANSLATIONS[lang]['custom_result'].format(uc_amount=uc_amount, price=price)
-            )
-        except ValueError:
-            await update.message.reply_text("Введите положительное число.")
-        context.user_data['waiting_for_custom_uc'] = False
+        if context.user_data.get('waiting_for_custom_uc', False):
+            try:
+                uc_amount = int(update.message.text)
+                if uc_amount <= 0:
+                    raise ValueError
+                price = uc_amount * 1.5
+                await update.message.reply_text(
+                    TRANSLATIONS[lang]['custom_result'].format(uc_amount=uc_amount, price=price)
+                )
+            except ValueError:
+                await update.message.reply_text("Введите положительное число.")
+            context.user_data['waiting_for_custom_uc'] = False
+    except Exception as e:
+        logger.error(f"Handle custom UC failed: {e}")
 
 async def referral(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language, referral_code FROM users WHERE user_id = ?", (user_id,))
-    lang, referral_code = c.fetchone()
-    if not referral_code:
-        referral_code = f"ref{user_id}"
-        c.execute("UPDATE users SET referral_code = ? WHERE user_id = ?", (referral_code, user_id))
-        conn.commit()
-    conn.close()
-    link = f"t.me/YourBot?start={referral_code}"
-    await update.message.reply_text(TRANSLATIONS[lang]['referral'].format(link=link))
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language, referral_code FROM users WHERE user_id = ?", (user_id,))
+        lang, referral_code = c.fetchone()
+        if not referral_code:
+            referral_code = f"ref{user_id}"
+            c.execute("UPDATE users SET referral_code = ? WHERE user_id = ?", (referral_code, user_id))
+            conn.commit()
+        conn.close()
+        link = f"t.me/YourBot?start={referral_code}"
+        await update.message.reply_text(TRANSLATIONS[lang]['referral'].format(link=link))
+    except Exception as e:
+        logger.error(f"Referral command failed: {e}")
 
 async def language(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Русский", callback_data="lang_ru")],
-        [InlineKeyboardButton("English", callback_data="lang_en")]
-    ])
-    await update.message.reply_text("Выберите язык / Select language:", reply_markup=keyboard)
+    try:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Русский", callback_data="lang_ru")],
+            [InlineKeyboardButton("English", callback_data="lang_en")]
+        ])
+        await update.message.reply_text("Выберите язык / Select language:", reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Language command failed: {e}")
 
 async def set_language(update: Update, context):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    lang = 'ru' if query.data == "lang_ru" else 'en'
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
-    conn.commit()
-    conn.close()
-    await query.message.reply_text("Язык изменен / Language changed.")
+    try:
+        lang = 'ru' if query.data == "lang_ru" else 'en'
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
+        conn.commit()
+        conn.close()
+        await query.message.reply_text("Язык изменен / Language changed.")
+    except Exception as e:
+        logger.error(f"Set language failed: {e}")
 
 async def admin(update: Update, context):
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
         await update.message.reply_text("Доступ запрещен.")
         return
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Просмотреть заказы", callback_data="admin_orders")],
-        [InlineKeyboardButton("Статистика", callback_data="admin_stats")],
-        [InlineKeyboardButton("Заблокировать пользователя", callback_data="admin_ban")]
-    ])
-    await update.message.reply_text("Админ-панель:", reply_markup=keyboard)
+    try:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Просмотреть заказы", callback_data="admin_orders")],
+            [InlineKeyboardButton("Статистика", callback_data="admin_stats")],
+            [InlineKeyboardButton("Заблокировать пользователя", callback_data="admin_ban")]
+        ])
+        await update.message.reply_text("Админ-панель:", reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Admin command failed: {e}")
 
 async def admin_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
-
     if query.from_user.id != ADMIN_ID:
         await query.message.reply_text("Доступ запрещен.")
         return
+    try:
+        if query.data == "admin_orders":
+            conn = sqlite3.connect('/app/bot.db')
+            c = conn.cursor()
+            c.execute("SELECT user_id, uc_amount, price, status, timestamp FROM orders")
+            orders = c.fetchall()
+            conn.close()
+            if not orders:
+                await query.message.reply_text("Заказов нет.")
+                return
+            orders_text = "\n".join([f"ID: {o[0]}, UC: {o[1]}, Цена: {o[2]}, Статус: {o[3]}, Время: {o[4]}" for o in orders])
+            await query.message.reply_text(f"Заказы:\n{orders_text}")
 
-    if query.data == "admin_orders":
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("SELECT player_id, uc_amount, price, status, timestamp FROM orders")
-        orders = c.fetchall()
-        conn.close()
+        elif query.data == "admin_stats":
+            conn = sqlite3.connect('/app/bot.db')
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*), SUM(CAST(REPLACE(price, ' ₽', '') AS REAL)) FROM orders")
+            count, total = c.fetchone()
+            c.execute("SELECT uc_amount, COUNT(*) FROM orders GROUP BY uc_amount ORDER BY COUNT(*) DESC LIMIT 1")
+            popular = c.fetchone()
+            conn.close()
+            stats = f"Заказов: {count}\nОбщая выручка: {total or 0:.2f} ₽\nПопулярный пакет: {popular[0]} UC ({popular[1]} заказов)"
+            await query.message.reply_text(stats)
 
-        if not orders:
-            await query.message.reply_text("Заказов нет.")
-            return
-
-        orders_text = ""
-        for idx, order in enumerate(orders, 1):
-            orders_text += f"{idx}. PUBG ID: {order[0]}, UC: {order[1]}, Цена: {order[2]}, Статус: {order[3]}, Время: {order[4]}\n"
-
-        await query.message.reply_text(f"Заказы:\n{orders_text}")
-
-    elif query.data == "admin_stats":
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*), SUM(CAST(REPLACE(price, ' ₽', '') AS REAL)) FROM orders")
-        count, total = c.fetchone()
-        c.execute("SELECT uc_amount, COUNT(*) FROM orders GROUP BY uc_amount ORDER BY COUNT(*) DESC LIMIT 1")
-        popular = c.fetchone()
-        conn.close()
-        stats = f"Заказов: {count}\nОбщая выручка: {total or 0:.2f} ₽\nПопулярный пакет: {popular[0]} UC ({popular[1]} заказов)"
-        await query.message.reply_text(stats)
-
-    elif query.data == "admin_ban":
-        await query.message.reply_text("Введите ID пользователя для блокировки:")
-        context.user_data['waiting_for_ban'] = True
-
+        elif query.data == "admin_ban":
+            await query.message.reply_text("Введите ID пользователя для блокировки:")
+            context.user_data['waiting_for_ban'] = True
+    except Exception as e:
+        logger.error(f"Admin callback failed: {e}")
 
 async def handle_admin_ban(update: Update, context):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("Доступ запрещен.")
         return
-    if context.user_data.get('waiting_for_ban', False):
-        try:
-            ban_id = int(update.message.text)
-            conn = sqlite3.connect('bot.db')
-            c = conn.cursor()
-            c.execute("INSERT OR IGNORE INTO banned_users (user_id) VALUES (?)", (ban_id,))
-            conn.commit()
-            conn.close()
-            await update.message.reply_text(f"Пользователь {ban_id} заблокирован.")
-        except ValueError:
-            await update.message.reply_text("Введите корректный ID.")
-        context.user_data['waiting_for_ban'] = False
+    try:
+        if context.user_data.get('waiting_for_ban', False):
+            try:
+                ban_id = int(update.message.text)
+                conn = sqlite3.connect('/app/bot.db')
+                c = conn.cursor()
+                c.execute("INSERT OR IGNORE INTO banned_users (user_id) VALUES (?)", (ban_id,))
+                conn.commit()
+                conn.close()
+                await update.message.reply_text(f"Пользователь {ban_id} заблокирован.")
+            except ValueError:
+                await update.message.reply_text("Введите корректный ID.")
+            context.user_data['waiting_for_ban'] = False
+    except Exception as e:
+        logger.error(f"Handle admin ban failed: {e}")
 
 async def reminder(context):
     job = context.job
     user_id = job.data['user_id']
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    c.execute("SELECT uc_amount FROM orders WHERE user_id = ? AND status = 'pending' ORDER BY timestamp DESC LIMIT 1", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    if result:
-        await context.bot.send_message(user_id, TRANSLATIONS[lang]['reminder'].format(uc_amount=result[0]))
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
+        c.execute("SELECT uc_amount FROM orders WHERE user_id = ? AND status = 'pending' ORDER BY timestamp DESC LIMIT 1", (user_id,))
+        result = c.fetchone()
+        conn.close()
+        if result:
+            await context.bot.send_message(user_id, TRANSLATIONS[lang]['reminder'].format(uc_amount=result[0]))
+    except Exception as e:
+        logger.error(f"Reminder failed: {e}")
 
 async def simple_chatbot(update: Update, context):
     if await check_ban(update, context):
         return
     user_id = update.effective_user.id
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
-    lang = c.fetchone()[0]
-    conn.close()
+    try:
+        conn = sqlite3.connect('/app/bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
+        lang = c.fetchone()[0]
+        conn.close()
 
-    text = update.message.text.lower()
-    responses = {
-        'ru': {
-            'как долго ждать': "UC будут зачислены в течение 10-30 минут после подтверждения платежа.",
-            'где мой заказ': "Проверьте статус заказа с помощью команды /history.",
-            'как оплатить': "Используйте команду /buy_uc, выберите пакет UC, введите ID игрока и следуйте инструкциям."
-        },
-        'en': {
-            'how long to wait': "UC will be credited within 10-30 minutes after payment confirmation.",
-            'where is my order': "Check your order status with the /history command.",
-            'how to pay': "Use the /buy_uc command, select a UC package, enter your player ID, and follow the instructions."
+        text = update.message.text.lower()
+        responses = {
+            'ru': {
+                'как долго ждать': "UC будут зачислены в течение 10-30 минут после подтверждения платежа.",
+                'где мой заказ': "Проверьте статус заказа с помощью команды /history.",
+                'как оплатить': "Используйте команду /buy_uc, выберите пакет UC, введите ID игрока и следуйте инструкциям."
+            },
+            'en': {
+                'how long to wait': "UC will be credited within 10-30 minutes after payment confirmation.",
+                'where is my order': "Check your order status with the /history command.",
+                'how to pay': "Use the /buy_uc command, select a UC package, enter your player ID, and follow the instructions."
+            }
         }
-    }
-    response = responses[lang].get(text, "Извините, я не понял. Используйте /start для списка команд." if lang == 'ru' else "Sorry, I didn't understand. Use /start for a list of commands.")
-    await update.message.reply_text(response)
+        response = responses[lang].get(text, "Извините, я не понял. Используйте /start для списка команд." if lang == 'ru' else "Sorry, I didn't understand. Use /start for a list of commands.")
+        await update.message.reply_text(response)
+    except Exception as e:
+        logger.error(f"Simple chatbot failed: {e}")
 
-def main():
-    application = Application.builder().token("7639881166:AAE4Ko30GeTLqHBsxdpHZzBT-0lxOILRYiQ").build()
+async def main():
+    try:
+        # Проверка токена
+        token = os.environ.get("TOKEN")
+        if not token:
+            logger.error("No TOKEN environment variable set")
+            raise ValueError("No TOKEN environment variable set")
 
-    # Обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("buy_uc", buy_uc))
-    application.add_handler(CommandHandler("promo", promo))
-    application.add_handler(CommandHandler("history", history))
-    application.add_handler(CommandHandler("bonuses", bonuses))
-    application.add_handler(CommandHandler("custom", custom_uc))
-    application.add_handler(CommandHandler("referral", referral))
-    application.add_handler(CommandHandler("language", language))
-    application.add_handler(CommandHandler("admin", admin))
-    application.add_handler(CallbackQueryHandler(button_callback, pattern="^(60uc|325uc|660uc|1800uc|3850uc|8100uc|enter_id|pay)$"))
-    application.add_handler(CallbackQueryHandler(set_language, pattern="^lang_"))
-    application.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^\d{8,12}$'), handle_player_id))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_promo))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_uc))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_ban))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, simple_chatbot))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_screenshot))
+        application = Application.builder().token(token).build()
 
-    # Запуск бота
-    application.run_polling()
+        # Обработчики
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("buy_uc", buy_uc))
+        application.add_handler(CommandHandler("promo", promo))
+        application.add_handler(CommandHandler("history", history))
+        application.add_handler(CommandHandler("bonuses", bonuses))
+        application.add_handler(CommandHandler("custom", custom_uc))
+        application.add_handler(CommandHandler("referral", referral))
+        application.add_handler(CommandHandler("language", language))
+        application.add_handler(CommandHandler("admin", admin))
+        application.add_handler(CallbackQueryHandler(button_callback, pattern="^(60uc|325uc|660uc|1800uc|3850uc|8100uc|enter_id|pay)$"))
+        application.add_handler(CallbackQueryHandler(set_language, pattern="^lang_"))
+        application.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^\d{8,12}$'), handle_player_id))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_promo))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_uc))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_ban))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, simple_chatbot))
+        application.add_handler(MessageHandler(filters.PHOTO, handle_screenshot))
+
+        # Запуск с вебхуком
+        logger.info("Starting webhook")
+        await application.initialize()
+        await application.start()
+        await application.updater.start_webhook(
+            listen="0.0.0.0",
+            port=8443,
+            url_path="/webhook",
+            webhook_url="https://topup-uc-bot.onrender.com/webhook"
+        )
+        logger.info("Webhook started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start application: {e}")
+        raise
 
 if __name__ == '__main__':
     asyncio.run(main())
